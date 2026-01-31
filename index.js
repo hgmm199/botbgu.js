@@ -1,51 +1,48 @@
-// index.js
+// ==================== FILE: index.js ====================
 const { Client, GatewayIntentBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, REST, Routes } = require('discord.js');
 const { spawn } = require('child_process');
+const express = require('express'); 
 
 // ================= CẤU HÌNH BOT CHÍNH =================
 const TOKEN_BOT_MAIN = 'TOKEN_BOT_CUA_BAN'; // <--- Thay Token Bot Developer
 const CLIENT_ID = 'ID_BOT_CUA_BAN';         // <--- Thay ID Bot Developer
 
+// --- PHẦN QUAN TRỌNG: SERVER ẢO (ĐỂ TREO 24/24) ---
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('Bot Manager đang chạy 24/24! Đừng tắt tab này nếu chạy local.');
+});
+
+app.listen(PORT, () => {
+    console.log(`🌐 Server ảo đang chạy tại port ${PORT}`);
+});
+
+// --- PHẦN BOT DISCORD ---
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const runningProcesses = new Map();
 
-const commands = [{ name: 'token', description: 'Kích hoạt Auto Chat' }];
+// Đăng ký lệnh /token
+const commands = [{ name: 'token', description: 'Cấu hình Auto Chat' }];
 const rest = new REST({ version: '10' }).setToken(TOKEN_BOT_MAIN);
+
 (async () => {
-    try { await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands }); console.log('✅ Đã đăng ký lệnh /token'); } 
-    catch (e) { console.error(e); }
+    try { 
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands }); 
+        console.log('✅ Đã đăng ký lệnh /token'); 
+    } catch (e) { console.error(e); }
 })();
 
 client.on(Events.InteractionCreate, async interaction => {
-    // 1. Hiện Modal nhập liệu (3 ô)
+    // 1. Hiện Modal
     if (interaction.isChatInputCommand() && interaction.commandName === 'token') {
-        const modal = new ModalBuilder().setCustomId('autoChatModal').setTitle('Cấu hình Bot Groq');
+        const modal = new ModalBuilder().setCustomId('setupBotModal').setTitle('Cấu hình Bot');
         
-        // Ô 1: User Token
-        const tokenInput = new TextInputBuilder()
-            .setCustomId('tokenIn')
-            .setLabel("User Token Discord")
-            .setPlaceholder("Token tài khoản dùng để chat...")
-            .setStyle(TextInputStyle.Paragraph)
-            .setRequired(true);
-
-        // Ô 2: ID Kênh
-        const channelInput = new TextInputBuilder()
-            .setCustomId('channelIn')
-            .setLabel("ID Kênh Discord")
-            .setPlaceholder("Ví dụ: 123456789...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-
-        // Ô 3: GROQ API KEY (MỚI THÊM)
-        const keyInput = new TextInputBuilder()
-            .setCustomId('keyIn')
-            .setLabel("Groq API Key")
-            .setPlaceholder("gsk_...")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
+        const tokenInput = new TextInputBuilder().setCustomId('tokenIn').setLabel("User Token").setStyle(TextInputStyle.Paragraph).setRequired(true);
+        const channelInput = new TextInputBuilder().setCustomId('channelIn').setLabel("ID Kênh").setStyle(TextInputStyle.Short).setRequired(true);
+        const keyInput = new TextInputBuilder().setCustomId('keyIn').setLabel("Groq API Key").setStyle(TextInputStyle.Short).setRequired(true);
         
-        // Add 3 ô vào 3 hàng riêng biệt
         modal.addComponents(
             new ActionRowBuilder().addComponents(tokenInput), 
             new ActionRowBuilder().addComponents(channelInput),
@@ -55,34 +52,32 @@ client.on(Events.InteractionCreate, async interaction => {
         await interaction.showModal(modal);
     }
 
-    // 2. Xử lý khi bấm nút "Gửi"
-    if (interaction.isModalSubmit() && interaction.customId === 'autoChatModal') {
-        // Lấy dữ liệu từ 3 ô
+    // 2. Xử lý Gửi -> Chạy luôn
+    if (interaction.isModalSubmit() && interaction.customId === 'setupBotModal') {
         const userToken = interaction.fields.getTextInputValue('tokenIn').trim();
-        const targetChannelId = interaction.fields.getTextInputValue('channelIn').trim();
-        const userKey = interaction.fields.getTextInputValue('keyIn').trim(); // <--- Lấy Key
+        const targetChannel = interaction.fields.getTextInputValue('channelIn').trim();
+        const userKey = interaction.fields.getTextInputValue('keyIn').trim();
 
-        // Tắt bot cũ nếu trùng kênh
-        if (runningProcesses.has(targetChannelId)) {
-            const oldProcess = runningProcesses.get(targetChannelId);
-            oldProcess.kill(); 
-            runningProcesses.delete(targetChannelId);
+        // Kill process cũ nếu trùng kênh
+        if (runningProcesses.has(targetChannel)) {
+            try {
+                process.kill(runningProcesses.get(targetChannel).pid);
+                runningProcesses.delete(targetChannel);
+            } catch (e) {}
         }
 
-        console.log(`>>> KÍCH HOẠT WORKER CHO KÊNH: ${targetChannelId}`);
+        console.log(`>>> [NEW] Kích hoạt Worker cho kênh: ${targetChannel}`);
 
-        // --- Truyền cả 3 biến sang worker ---
-        // node worker.js "token" "channel" "key"
-        const worker = spawn('node', ['worker.js', userToken, targetChannelId, userKey]);
+        // Spawn Worker
+        const worker = spawn('node', ['worker.js', userToken, targetChannel, userKey]);
+        runningProcesses.set(targetChannel, worker);
 
-        runningProcesses.set(targetChannelId, worker);
-
-        worker.stdout.on('data', (data) => console.log(`[Worker ${targetChannelId}]: ${data}`));
-        worker.stderr.on('data', (data) => console.error(`[Worker Lỗi]: ${data}`));
-        worker.on('close', () => runningProcesses.delete(targetChannelId));
+        worker.stdout.on('data', (data) => console.log(`[Worker ${targetChannel}]: ${data}`));
+        worker.stderr.on('data', (data) => console.error(`[Lỗi Worker]: ${data}`));
+        worker.on('close', () => runningProcesses.delete(targetChannel));
 
         await interaction.reply({ 
-            content: `✅ **Đã kích hoạt!**\n- Kênh: \`${targetChannelId}\`\n- Key: Đã cập nhật.\nBot đang chạy ngầm...`, 
+            content: `✅ **Đã treo thành công!**\n- Kênh: ${targetChannel}\nBot đang chạy ngầm 24/24.`, 
             ephemeral: true 
         });
     }
