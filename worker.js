@@ -1,21 +1,22 @@
-// worker.js
+// ==================== FILE: worker.js ====================
 const axios = require('axios');
 const Groq = require('groq-sdk');
 
 // --- NHẬN DỮ LIỆU TỪ INDEX.JS ---
-// Thứ tự nhận: [0]=Token User, [1]=Channel ID, [2]=Groq Key
+// [0]: Node, [1]: File, [2]: Token, [3]: ChannelID, [4]: GroqKey
 const args = process.argv.slice(2);
 
 if (args.length < 3) {
-    console.error("Thiếu tham số! Cần: Token, Channel ID, Groq Key");
+    console.error("[LỖI WORKER] Thiếu tham số! Cần: Token, Channel ID, Groq Key");
     process.exit(1);
 }
 
 const TOKEN = args[0];
 const CHANNEL_ID = args[1];
-const GROQ_API_KEY = args[2]; // <--- Nhận Key từ đây
+const GROQ_API_KEY = args[2]; 
 
-const BOT_PERSONA = "một game thủ Discord, trẻ trâu, hài hước, cục súc, trả lời ngắn gọn dưới 20 từ";
+// Cấu hình tính cách
+const BOT_PERSONA = "một game thủ Discord, trẻ trâu, hài hước, cục súc, trả lời ngắn gọn dưới 20 từ, không sến súa";
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -34,48 +35,70 @@ async function askGroq(userMessage) {
 }
 
 async function main() {
-    const headers = { "Authorization": TOKEN, "Content-Type": "application/json" };
+    // Giả lập trình duyệt để tránh bị chặn
+    const headers = { 
+        "Authorization": TOKEN, 
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    };
+    
     let myId = null;
 
-    // Login check
+    // 1. Check Login
     try {
         const me = await axios.get("https://discord.com/api/v9/users/@me", { headers });
         myId = me.data.id;
-        console.log(`[LOGIN OK] ${me.data.username}`);
+        console.log(`[LOGIN OK] User: ${me.data.username} | ID: ${myId}`);
     } catch (e) {
-        console.log("[LỖI] Token Discord sai!"); return;
+        console.log("[LỖI] Token sai hoặc bị khóa."); 
+        process.exit(1);
     }
 
     const url = `https://discord.com/api/v9/channels/${CHANNEL_ID}/messages`;
     let lastProcessedId = null;
 
-    // Lấy tin nhắn cuối
+    // 2. Lấy tin nhắn cuối
     try {
         const init = await axios.get(url, { headers, params: { limit: 1 } });
         if (init.data.length > 0) lastProcessedId = init.data[0].id;
     } catch (e) {}
 
-    console.log(`>>> Worker đang chạy kênh: ${CHANNEL_ID}`);
+    console.log(`>>> Worker đang trực tại kênh: ${CHANNEL_ID}`);
 
+    // 3. Vòng lặp vô tận
     while (true) {
         try {
             const res = await axios.get(url, { headers, params: { limit: 1 } });
+            
             if (res.data.length > 0) {
                 const msg = res.data[0];
+                
+                // Nếu tin mới + Không phải của mình
                 if (msg.id !== lastProcessedId && msg.author.id !== myId) {
                     lastProcessedId = msg.id;
-                    console.log(`[Khách]: ${msg.content}`);
+                    console.log(`\n[Khách]: ${msg.content}`);
                     
                     const reply = await askGroq(msg.content);
+                    
                     if (reply) {
-                        await axios.post(url, { content: reply, message_reference: { message_id: msg.id, channel_id: CHANNEL_ID } }, { headers });
+                        await axios.post(url, { 
+                            content: reply, 
+                            message_reference: { message_id: msg.id, channel_id: CHANNEL_ID } 
+                        }, { headers });
+                        
                         console.log(`[Bot]: ${reply}`);
-                        await sleep(4000);
+                        await sleep(5000); // Nghỉ 5s sau khi chat
                     }
                 }
             }
-        } catch (e) { if (e.response?.status === 429) await sleep(5000); }
-        await sleep(1000);
+        } catch (e) { 
+            if (e.response && e.response.status === 429) {
+                console.log("Rate Limit! Nghỉ 10s...");
+                await sleep(10000);
+            }
+        }
+        await sleep(2000); // Check 2s/lần
     }
 }
+
 main();
